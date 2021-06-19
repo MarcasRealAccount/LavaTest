@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstring>
 
 #include <vector>
 #include <filesystem>
@@ -9,6 +10,8 @@
 
 #if LAVA_SYSTEM_windows
 #include <Windows.h>
+#elif LAVA_SYSTEM_linux
+#include <sys/mman.h>
 #endif
 
 template <class T>
@@ -26,6 +29,11 @@ struct ExecutableAllocator {
 		if (!memRegion)
 			throw std::bad_alloc();
 		return reinterpret_cast<T*>(memRegion);
+#elif LAVA_SYSTEM_linux
+		void* memRegion = mmap(nullptr, n * sizeof(T), PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (memRegion == (void*)-1)
+			throw std::bad_alloc();
+		return reinterpret_cast<T*>(memRegion);
 #else
 		static_assert(false, "ExecutableAllocator only works on Windows!");
 #endif
@@ -34,6 +42,8 @@ struct ExecutableAllocator {
 	void deallocate(T* p, std::size_t n) {
 #if LAVA_SYSTEM_windows
 		VirtualFree(reinterpret_cast<LPVOID>(p), 0, MEM_RELEASE);
+#elif LAVA_SYSTEM_linux
+		munmap(p, n);
 #else
 		static_assert(false, "ExecutableAllocator only works on Windows!");
 #endif
@@ -168,38 +178,45 @@ private:
 std::vector<std::filesystem::path> classPaths;
 
 struct ClassConstantPoolEntry {
-	ClassConstantPoolEntry() : tag(0), info{ 0 } {}
+	ClassConstantPoolEntry() : tag(0) {}
 	ClassConstantPoolEntry(ClassConstantPoolEntry&& move) noexcept
-		: tag(move.tag), info{ 0 } {
+		: tag(move.tag) {
 		switch (tag) {
 		case 1:
-			entries.Class.nameIndex = move.entries.Class.nameIndex;
+			data.entries.Class.nameIndex = move.data.entries.Class.nameIndex;
 			break;
 		case 2:
-			entries.UTF8.string = std::move(move.entries.UTF8.string);
+			data.entries.UTF8.string = std::move(move.data.entries.UTF8.string);
 			break;
 		}
 	}
 	ClassConstantPoolEntry& operator=(ClassConstantPoolEntry&& move) noexcept {
 		tag = move.tag;
-		std::memset(this->info, 0, sizeof(this->info));
+		std::memset(this->data.info, 0, sizeof(this->data.info));
 		switch (tag) {
 		case 1:
-			entries.Class.nameIndex = move.entries.Class.nameIndex;
+			data.entries.Class.nameIndex = move.data.entries.Class.nameIndex;
 			break;
 		case 2:
-			entries.UTF8.string = std::move(move.entries.UTF8.string);
+			data.entries.UTF8.string = std::move(move.data.entries.UTF8.string);
 			break;
 		}
 		return *this;
 	}
-	~ClassConstantPoolEntry() {}
+	~ClassConstantPoolEntry() {
+		switch (tag) {
+		case 2:
+			data.entries.UTF8.string.~basic_string();
+			break;
+		}
+	}
 
 	std::uint8_t tag;
-	union {
-		union ClassConstantPoolEntries {
-			~ClassConstantPoolEntries() {}
+	union Data {
+		Data() : info{ 0 } {}
+		~Data() {}
 
+		union Entries {
 			struct Class { // Tag 1
 				std::uint16_t nameIndex; // Constant pool index to a UTF8 entry
 			} Class;
@@ -208,7 +225,7 @@ struct ClassConstantPoolEntry {
 			} UTF8;
 		} entries;
 		std::uint8_t info[sizeof(entries)];
-	};
+	} data;
 };
 
 struct ClassAttributeEntry {
@@ -237,7 +254,7 @@ bool validateConstantPool(std::vector<ClassConstantPoolEntry>& constantPool) {
 		ClassConstantPoolEntry& entry = constantPool[i];
 		switch (entry.tag) {
 		case 1: {
-			std::uint16_t nameIndex = entry.entries.Class.nameIndex;
+			std::uint16_t nameIndex = entry.data.entries.Class.nameIndex;
 			if (nameIndex == 0 || nameIndex > constantPool.size() || constantPool[nameIndex - 1].tag != 2) return false; // Class entry was not pointing to a UTF8 entry
 			break;
 		}
@@ -253,7 +270,7 @@ bool validateAttributes(std::vector<ClassAttributeEntry>& attributes, std::vecto
 	for (std::size_t i = 0; i < attributes.size(); i++) {
 		ClassAttributeEntry& entry = attributes[i];
 		if (entry.nameIndex == 0 || entry.nameIndex > constantPool.size() || constantPool[entry.nameIndex - 1].tag != 2) return false; // Attribute name index does not point to a UTF8 entry
-		auto& attributeName = constantPool[entry.nameIndex - 1].entries.UTF8.string;
+		auto& attributeName = constantPool[entry.nameIndex - 1].data.entries.UTF8.string;
 		if (attributeName == "code") {
 			if (codeAttributes > 0) return false; // Can only have one code attribute
 			codeAttributes++;
@@ -450,12 +467,13 @@ Class* loadClassVersion1(ByteBuffer& buffer) {
 		entry.tag = buffer.getUI1();
 		switch (entry.tag) {
 		case 1: {
-			entry.entries.Class.nameIndex = buffer.getUI2();
+			entry.data.entries.Class.nameIndex = buffer.getUI2();
 			break;
 		}
 		case 2: {
-			std::uint32_t length = buffer.getUI4();
-			entry.entries.UTF8.string = buffer.getString(static_cast<std::size_t>(length));
+			auto length = buffer.getUI4();
+			std::string str = buffer.getString(static_cast<std::size_t>(length));
+			entry.data.entries.UTF8.string = str;
 			break;
 		}
 		default: return nullptr; // Constant pool entry tag invalid
@@ -515,11 +533,11 @@ Class* loadClassVersion1(ByteBuffer& buffer) {
 	if (!validateAttributes(attributes, constantPool)) return nullptr; // One or more Attribute entries are invalid
 
 	auto clazz = new Class();
-	clazz->name = constantPool[constantPool[thisClass - 1].entries.Class.nameIndex - 1].entries.UTF8.string;
+	clazz->name = constantPool[constantPool[thisClass - 1].data.entries.Class.nameIndex - 1].data.entries.UTF8.string;
 	clazz->accessFlags = accessFlags;
 	clazz->supers.resize(supers.size());
 	for (std::size_t i = 0; i < supers.size(); i++) {
-		auto super = loadLavaClass(constantPool[constantPool[supers[i] - 1].entries.Class.nameIndex - 1].entries.UTF8.string);
+		auto super = loadLavaClass(constantPool[constantPool[supers[i] - 1].data.entries.Class.nameIndex - 1].data.entries.UTF8.string);
 		if (!super) return nullptr; // Super could not be loaded
 		clazz->supers[i] = super;
 	}
@@ -527,11 +545,11 @@ Class* loadClassVersion1(ByteBuffer& buffer) {
 	for (std::size_t i = 0; i < fields.size(); i++) {
 		auto& entry = fields[i];
 		auto& field = clazz->fields[i];
-		field.name = constantPool[entry.nameIndex - 1].entries.UTF8.string;
-		field.descriptor = constantPool[entry.descriptorIndex - 1].entries.UTF8.string;
+		field.name = constantPool[entry.nameIndex - 1].data.entries.UTF8.string;
+		field.descriptor = constantPool[entry.descriptorIndex - 1].data.entries.UTF8.string;
 		field.accessFlags = entry.accessFlags;
 		for (auto& attribute : entry.attributes) {
-			auto& attributeName = constantPool[attribute.nameIndex - 1].entries.UTF8.string;
+			auto& attributeName = constantPool[attribute.nameIndex - 1].data.entries.UTF8.string;
 			// TODO: Apply attributes to field
 		}
 	}
@@ -539,11 +557,11 @@ Class* loadClassVersion1(ByteBuffer& buffer) {
 	for (std::size_t i = 0; i < methods.size(); i++) {
 		auto& entry = methods[i];
 		auto& method = clazz->methods[i];
-		method.name = constantPool[entry.nameIndex - 1].entries.UTF8.string;
-		method.descriptor = constantPool[entry.descriptorIndex - 1].entries.UTF8.string;
+		method.name = constantPool[entry.nameIndex - 1].data.entries.UTF8.string;
+		method.descriptor = constantPool[entry.descriptorIndex - 1].data.entries.UTF8.string;
 		method.accessFlags = entry.accessFlags;
 		for (auto& attribute : entry.attributes) {
-			auto& attributeName = constantPool[attribute.nameIndex - 1].entries.UTF8.string;
+			auto& attributeName = constantPool[attribute.nameIndex - 1].data.entries.UTF8.string;
 			if (attributeName == "code") {
 				method.code.resize(attribute.info.size());
 				std::memcpy(method.code.data(), attribute.info.data(), method.code.size());

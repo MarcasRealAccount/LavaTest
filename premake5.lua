@@ -40,9 +40,11 @@ workspace("LavaTest")
 		files({ "%{prj.location}/**" })
 		removefiles({ "**.vcxproj", "**.vcproj.*", "**/Makefile", "**.make" })
 	
+	if _ACTION == "vs2019" then
 	project("Run")
 		kind("None")
 		location("Run")
 		
 		files({ "%{prj.location}/**" })
 		removefiles({ "**.vcxproj", "**.vcproj.*", "**/Makefile", "**.make" })
+	end
