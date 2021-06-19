@@ -38,7 +38,7 @@ workspace("LavaTest")
 		debugdir("%{wks.location}/Run")
 		
 		files({ "%{prj.location}/**" })
-		removefiles({ "**.vcxproj", "**.vcproj.*", "**/Makefile", "**.make" })
+		removefiles({ "**.vcxproj", "**.vcxproj.*", "**/Makefile", "**.make" })
 	
 	if _ACTION == "vs2019" then
 	project("Run")
