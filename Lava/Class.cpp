@@ -1,5 +1,20 @@
 #include "Class.h"
 
+#include <cstring>
+
+#if LAVA_SYSTEM_windows
+	#include <Windows.h>
+#elif LAVA_SYSTEM_linux
+	#include <sys/mman.h>
+#else
+	#error Requires executable memory allocation, which isnt supported by your system
+#endif
+
+static void* allocateReadWriteMemory(std::size_t bytes);
+static void makeExecutableMemory(void* p, std::size_t bytes);
+static void makeNonExecutableMemory(void* p, std::size_t bytes);
+static void deallocateMemory(void* p, std::size_t bytes);
+
 //-------------
 // Class Flags
 //-------------
@@ -91,3 +106,77 @@ std::ostream& operator<<(std::ostream& stream, EAccessFlags flags) {
 //------------------
 // Class structures
 //------------------
+
+Method::~Method() {
+	if (this->allocated)
+		deallocateMemory(this->pCode, this->codeLength);
+}
+
+void Method::allocateCode(std::vector<std::uint8_t>& code) {
+	if (this->pCode) return;
+	this->allocated  = true;
+	this->codeLength = code.size();
+	this->pCode      = reinterpret_cast<std::uint8_t*>(allocateReadWriteMemory(this->codeLength));
+	std::memcpy(this->pCode, code.data(), this->codeLength);
+	makeCodeExecutable();
+}
+
+void Method::makeCodeReadWrite() {
+	makeNonExecutableMemory(this->pCode, this->codeLength);
+}
+
+void Method::makeCodeExecutable() {
+	makeExecutableMemory(this->pCode, this->codeLength);
+}
+
+#if LAVA_SYSTEM_linux
+std::uintptr_t gInvoke(std::uint8_t* pCode, ...) {
+	return 0;
+}
+#endif
+
+//----------------------------
+// Windows execute allocation
+//----------------------------
+
+#if LAVA_SYSTEM_windows
+void* allocateReadWriteMemory(std::size_t bytes) {
+	return VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+
+void makeExecutableMemory(void* p, std::size_t bytes) {
+	DWORD old;
+	VirtualProtect(p, bytes, PAGE_EXECUTE_READ, &old);
+}
+
+void makeNonExecutableMemory(void* p, std::size_t bytes) {
+	DWORD old;
+	VirtualProtect(p, bytes, PAGE_READWRITE, &old);
+}
+
+void deallocateMemory(void* p, std::size_t bytes) {
+	VirtualFree(p, 0, MEM_RELEASE);
+}
+#endif
+
+//----------------------------
+// Linux execute allocation
+//----------------------------
+
+#if LAVA_SYSTEM_linux
+void* allocateReadWriteMemory(std::size_t bytes) {
+	return mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+}
+
+void makeExecutableMemory(void* p, std::size_t bytes) {
+	mprotect(p, bytes, PROT_EXEC | PROT_READ);
+}
+
+void makeNonExecutableMemory(void* p, std::size_t bytes) {
+	mprotect(p, bytes, PROT_READ | PROT_WRITE);
+}
+
+void deallocateMemory(void* p, std::size_t bytes) {
+	munmap(p, bytes);
+}
+#endif

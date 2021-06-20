@@ -1,21 +1,6 @@
 #include "ClassRegistry.h"
 #include "ByteBuffer.h"
 
-#include <cstring>
-
-#if LAVA_SYSTEM_windows
-	#include <Windows.h>
-#elif LAVA_SYSTEM_linux
-	#include <sys/mman.h>
-#else
-	#error Requires executable memory allocation, which isnt supported by your system
-#endif
-
-static void* allocateReadWriteMemory(std::size_t bytes);
-static void makeExecutableMemory(void* p, std::size_t bytes);
-static void makeNonExecutableMemory(void* p, std::size_t bytes);
-static void deallocateMemory(void* p, std::size_t bytes);
-
 static Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus* loadStatus);
 
 std::ostream& operator<<(std::ostream& stream, EClassLoadStatus status) {
@@ -397,13 +382,8 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 		method.name        = entry.name;
 		method.descriptor  = entry.descriptor;
 		for (auto& attribute : entry.attributes) {
-			if (attribute.name == "code") { // If the attribute's name is "code" then allocate and set the code pointer of the method.
-				method.codeLength = attribute.info.size();
-				method.pCode      = reinterpret_cast<std::uint8_t*>(allocateReadWriteMemory(method.codeLength));
-				std::memcpy(method.pCode, attribute.info.data(), method.codeLength);
-				makeExecutableMemory(method.pCode, method.codeLength);
-				// TODO: Deallocate memory
-			}
+			if (attribute.name == "code") // If the attribute's name is "code" then allocate and set the code pointer of the method.
+				method.allocateCode(attribute.info);
 		}
 	}
 
@@ -411,49 +391,3 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 	if (loadStatus) *loadStatus = EClassLoadStatus::Success;
 	return clazz;
 }
-
-//----------------------------
-// Windows execute allocation
-//----------------------------
-
-#if LAVA_SYSTEM_windows
-void* allocateReadWriteMemory(std::size_t bytes) {
-	return VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-}
-
-void makeExecutableMemory(void* p, std::size_t bytes) {
-	DWORD old;
-	VirtualProtect(p, bytes, PAGE_EXECUTE_READ, &old);
-}
-
-void makeNonExecutableMemory(void* p, std::size_t bytes) {
-	DWORD old;
-	VirtualProtect(p, bytes, PAGE_READWRITE, &old);
-}
-
-void deallocateMemory(void* p, std::size_t bytes) {
-	VirtualFree(p, 0, MEM_RELEASE);
-}
-#endif
-
-//----------------------------
-// Linux execute allocation
-//----------------------------
-
-#if LAVA_SYSTEM_linux
-void* allocateReadWriteMemory(std::size_t bytes) {
-	return mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-}
-
-void makeExecutableMemory(void* p, std::size_t bytes) {
-	mprotect(p, bytes, PROT_EXEC | PROT_READ);
-}
-
-void makeNonExecutableMemory(void* p, std::size_t bytes) {
-	mprotect(p, bytes, PROT_READ | PROT_WRITE);
-}
-
-void deallocateMemory(void* p, std::size_t bytes) {
-	munmap(p, bytes);
-}
-#endif

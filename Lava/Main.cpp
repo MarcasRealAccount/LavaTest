@@ -39,17 +39,6 @@ void debugPrintClass(Class* clazz) {
 	}
 }
 
-template <class R, class... Params>
-union FunctionCast {
-	using FuncType = R (*)(Params...);
-
-	FunctionCast(FuncType func) : func(func) { }
-	FunctionCast(void* ptr) : ptr(ptr) { }
-
-	FuncType func;
-	void* ptr;
-};
-
 int main() {
 	ClassRegistry classRegistry;
 	// Add current working directory to the class paths
@@ -64,7 +53,7 @@ int main() {
 	// Debug print class information
 	debugPrintClass(clazz);
 	// Invoke the first method in the class
-	int result = FunctionCast<int>(clazz->methods[0].pCode).func();
+	int result = clazz->methods[0].invoke<char, char, char>(1, 2, 3);
 	// Print the return value from the method
 	std::cout << "Returned: " << std::hex << std::uppercase << result << std::dec << std::nouppercase << "\n";
 }

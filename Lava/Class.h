@@ -60,6 +60,8 @@ namespace EAccessFlag {
 // Class structures
 //------------------
 
+extern "C" std::uintptr_t gInvoke(std::uint8_t* pCode, std::uint8_t arg0, std::uint8_t arg1, std::uint8_t arg2, ...);
+
 struct Field;
 struct Method;
 struct Class;
@@ -71,11 +73,21 @@ struct Field {
 };
 
 struct Method {
+	~Method();
+
 	std::string name;
 	std::string descriptor;
 	EAccessFlags accessFlags = EAccessFlag::Public;
 	std::size_t codeLength   = 0;
 	std::uint8_t* pCode      = nullptr;
+	bool allocated           = false;
+
+	void allocateCode(std::vector<std::uint8_t>& code);
+	void makeCodeReadWrite();
+	void makeCodeExecutable();
+	bool isInvokable() const { return this->pCode; }
+	template <class... Ts>
+	std::uintptr_t invoke(Ts&&... args) { return gInvoke(this->pCode, 0, 0, 0, args...); }
 };
 
 struct Class {
