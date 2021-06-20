@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+//-------------
+// Class Flags
+//-------------
+
 class EAccessFlags {
 public:
 	constexpr EAccessFlags(std::uint16_t value) : value(value) { }
@@ -51,6 +55,10 @@ namespace EAccessFlag {
 	static constexpr EAccessFlags Enum         = 0x4000;
 	static constexpr EAccessFlags Module       = 0x8000;
 } // namespace EAccessFlag
+
+//------------------
+// Class structures
+//------------------
 
 struct Field;
 struct Method;

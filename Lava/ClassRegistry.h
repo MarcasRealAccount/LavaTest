@@ -19,6 +19,7 @@ enum class EClassLoadStatus : std::uint32_t {
 	InvalidConstantPool,
 	InvalidConstantPoolEntry,
 	InvalidThisClassEntry,
+	InvalidSuperClassEntry,
 	InvalidFieldName,
 	InvalidFieldDescriptor,
 	InvalidAttributeName,

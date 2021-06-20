@@ -6,9 +6,8 @@
 void debugPrintClass(Class* clazz) {
 	std::cout << "Class '" << clazz->name << "'\n";
 	std::cout << "\tAccess Flags: '" << clazz->accessFlags << "'\n";
-	std::cout << "\tSupers:\n";
 	for (std::size_t i = 0; i < clazz->supers.size(); i++)
-		std::cout << "\t\t'" << clazz->supers[i]->name << "'\n";
+		std::cout << "\tSuper '" << clazz->supers[i]->name << "'\n";
 	for (std::size_t i = 0; i < clazz->fields.size(); i++) {
 		auto& field = clazz->fields[i];
 		std::cout << "\tField '" << field.name << "'\n";
@@ -53,14 +52,19 @@ union FunctionCast {
 
 int main() {
 	ClassRegistry classRegistry;
+	// Add current working directory to the class paths
 	classRegistry.addClassPath(".");
+	// Load class "Test" from the "Test.lclass" file in the "Run" directory
 	EClassLoadStatus loadStatus;
 	Class* clazz = classRegistry.loadClass("Test", &loadStatus);
 	if (!clazz) {
 		std::cerr << "Class could not be loaded '" << loadStatus << "'!" << std::endl;
 		return EXIT_FAILURE;
 	}
+	// Debug print class information
 	debugPrintClass(clazz);
+	// Invoke the first method in the class
 	int result = FunctionCast<int>(clazz->methods[0].pCode).func();
+	// Print the return value from the method
 	std::cout << "Returned: " << std::hex << std::uppercase << result << std::dec << std::nouppercase << "\n";
 }

@@ -1,5 +1,9 @@
 #include "Class.h"
 
+//-------------
+// Class Flags
+//-------------
+
 std::ostream& operator<<(std::ostream& stream, EAccessFlags flags) {
 	bool printed = false;
 	if (flags & EAccessFlag::Public) {
@@ -83,3 +87,7 @@ std::ostream& operator<<(std::ostream& stream, EAccessFlags flags) {
 	}
 	return stream;
 }
+
+//------------------
+// Class structures
+//------------------
