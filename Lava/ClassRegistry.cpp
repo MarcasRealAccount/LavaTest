@@ -1,6 +1,9 @@
 #include "ClassRegistry.h"
 #include "ByteBuffer.h"
 
+#include <cassert>
+#include <cstring>
+
 static Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus* loadStatus);
 
 std::ostream& operator<<(std::ostream& stream, EClassLoadStatus status) {
@@ -17,8 +20,22 @@ std::ostream& operator<<(std::ostream& stream, EClassLoadStatus status) {
 	case EClassLoadStatus::InvalidAttributeName: return stream << "InvalidAttributeName";
 	case EClassLoadStatus::InvalidMethodName: return stream << "InvalidMethodName";
 	case EClassLoadStatus::InvalidMethodDescriptor: return stream << "InvalidMethodDescriptor";
+	case EClassLoadStatus::InvalidMethodRefClassName: return stream << "InvalidMethodRefClassName";
+	case EClassLoadStatus::InvalidMethodRefMethodDescriptor: return stream << "InvalidMethodRefMethodDescriptor";
 	}
 	return stream;
+}
+
+ClassRegistry* globalClassRegistry = new ClassRegistry();
+
+Class* ClassRegistry::newClass(const std::string& className) {
+	auto itr = this->classes.find(className);
+	if (itr != this->classes.end()) return nullptr;
+
+	Class* clazz = new Class();
+	clazz->name  = className;
+	this->classes.insert({ className, clazz });
+	return clazz;
 }
 
 void ClassRegistry::addClassPath(const std::filesystem::path classPath) {
@@ -26,6 +43,10 @@ void ClassRegistry::addClassPath(const std::filesystem::path classPath) {
 }
 
 Class* ClassRegistry::loadClass(const std::string& className, EClassLoadStatus* loadStatus) {
+	// Look for the class in the registry
+	auto itr = this->classes.find(className);
+	if (itr != this->classes.end()) return itr->second;
+
 	std::filesystem::path filename = findClass(className);
 	if (filename.empty()) {
 		// .lclass file was not found
@@ -47,13 +68,47 @@ Class* ClassRegistry::loadClass(const std::string& className, EClassLoadStatus* 
 
 	// Read version and load class using that version
 	std::uint16_t version = buffer.getUI2();
+	Class* clazz;
 	switch (version) {
-	case 1: return loadClassV1(this, buffer, loadStatus);
+	case 1:
+		clazz = loadClassV1(this, buffer, loadStatus);
+		break;
 	default:
 		// Version is not one of the loadable versions
 		if (loadStatus) *loadStatus = EClassLoadStatus::InvalidVersion;
 		return nullptr;
 	}
+	if (clazz) this->classes.insert({ clazz->name, clazz });
+	return clazz;
+}
+
+Class* ClassRegistry::loadClassc(const char* className, EClassLoadStatus* loadStatus) {
+	return loadClass(std::string(className), loadStatus);
+}
+
+Class& ClassRegistry::loadClassError(const std::string& className) {
+	EClassLoadStatus loadStatus;
+	Class* clazz = loadClass(className, &loadStatus);
+	if (!clazz) {
+		std::ostringstream stream;
+		stream << "Class could not be loaded: '" << loadStatus << "'";
+		throw std::runtime_error(stream.str());
+	}
+	return *clazz;
+}
+
+Class& ClassRegistry::loadClassErrorc(const char* className) {
+	return loadClassError(std::string(className));
+}
+
+Method& ClassRegistry::getMethodErrorc(const char* className, const char* methodName) {
+	Class& clazz = loadClassErrorc(className);
+	return clazz.getMethodErrorc(methodName);
+}
+
+Method& ClassRegistry::getMethodFromDescriptorErrorc(const char* className, const char* methodDescriptor) {
+	Class& clazz = loadClassErrorc(className);
+	return clazz.getMethodFromDescriptorErrorc(methodDescriptor);
 }
 
 std::vector<Class*> ClassRegistry::getLoadedClasses() const {
@@ -168,27 +223,53 @@ ClassConstantPoolEntryV1* readConstantPoolEntryV1(ByteBuffer& buffer, EClassLoad
 	}
 }
 
-struct ClassAttributeEntryV1 {
+struct ClassAttributeV1 {
+	ClassAttributeV1(std::string&& name) : name(std::move(name)) { }
+
 	std::string name;
+};
+
+struct ClassAttributeUnknownV1 : public ClassAttributeV1 {
+	ClassAttributeUnknownV1(std::string&& name, std::vector<std::uint8_t>&& info) : info(std::move(info)), ClassAttributeV1(std::move(name)) { }
+
 	std::vector<std::uint8_t> info;
+};
+
+struct ClassAttributeMethodCodeV1 : public ClassAttributeV1 {
+	ClassAttributeMethodCodeV1(std::vector<std::uint8_t>&& code) : code(std::move(code)), ClassAttributeV1("code") { }
+
+	std::vector<std::uint8_t> code;
+};
+
+struct ClassAttributeMethodRefV1 : public ClassAttributeV1 {
+	ClassAttributeMethodRefV1(std::uint16_t classNameIndex, std::uint16_t methodDescriptorIndex, std::uint32_t byteOffset) : classNameIndex(classNameIndex), methodDescriptorIndex(methodDescriptorIndex), byteOffset(byteOffset), ClassAttributeV1("methodref") { }
+
+	std::uint16_t classNameIndex;
+	std::uint16_t methodDescriptorIndex;
+	std::uint32_t byteOffset;
 };
 
 struct ClassFieldEntryV1 {
 	EAccessFlags accessFlags = 0;
 	std::string name;
 	std::string descriptor;
-	std::vector<ClassAttributeEntryV1> attributes;
+	std::vector<ClassAttributeV1*> attributes;
 };
 
 struct ClassMethodEntryV1 {
 	EAccessFlags accessFlags = 0;
 	std::string name;
 	std::string descriptor;
-	std::vector<ClassAttributeEntryV1> attributes;
+	std::vector<ClassAttributeV1*> attributes;
 };
 
-ClassAttributeEntryV1 readAttributeEntryV1(ByteBuffer& buffer, ClassConstantPoolV1& constantPool, EClassLoadStatus* loadStatus) {
-	ClassAttributeEntryV1 attribute;
+struct ClassMethodRefV1 {
+	std::string className;
+	std::string methodDescriptor;
+	std::uint32_t byteOffset;
+};
+
+ClassAttributeV1* readAttributeEntryV1(ByteBuffer& buffer, ClassConstantPoolV1& constantPool, EClassLoadStatus* loadStatus) {
 	// Get attribute name
 	auto attributeNameEntry = constantPool.getEntry(buffer.getUI2());
 	if (!attributeNameEntry || attributeNameEntry->getTag() != ClassConstantUTF8EntryV1Tag) {
@@ -196,12 +277,26 @@ ClassAttributeEntryV1 readAttributeEntryV1(ByteBuffer& buffer, ClassConstantPool
 		if (loadStatus) *loadStatus = EClassLoadStatus::InvalidAttributeName;
 		return {};
 	}
-	attribute.name = reinterpret_cast<ClassConstantUTF8EntryV1*>(attributeNameEntry)->string;
+	auto attributeName = reinterpret_cast<ClassConstantUTF8EntryV1*>(attributeNameEntry);
+	auto& name         = attributeName->string;
 
 	// Read attribute info
 	std::uint32_t attributeLength = buffer.getUI4();
-	buffer.getUI1s(attribute.info, attributeLength);
-	return attribute;
+
+	if (name == "code") {
+		std::vector<std::uint8_t> code;
+		buffer.getUI1s(code, attributeLength);
+		return new ClassAttributeMethodCodeV1(std::move(code));
+	} else if (name == "methodref") {
+		std::uint16_t classNameIndex        = buffer.getUI2();
+		std::uint16_t methodDescriptorIndex = buffer.getUI2();
+		std::uint32_t byteOffset            = buffer.getUI4();
+		return new ClassAttributeMethodRefV1(classNameIndex, methodDescriptorIndex, byteOffset);
+	} else {
+		std::vector<std::uint8_t> info;
+		buffer.getUI1s(info, attributeLength);
+		return new ClassAttributeUnknownV1(std::string(name), std::move(info));
+	}
 }
 
 Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus* loadStatus) {
@@ -330,7 +425,7 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 
 	// Read class attributes
 	std::uint16_t attributeCount = buffer.getUI2();
-	std::vector<ClassAttributeEntryV1> attributes(attributeCount);
+	std::vector<ClassAttributeV1*> attributes(attributeCount);
 	for (std::size_t i = 0; i < attributes.size(); i++) {
 		// Try to read an attribute
 		EClassLoadStatus loadStatus2 = EClassLoadStatus::Success;
@@ -381,9 +476,103 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 		method.accessFlags = entry.accessFlags;
 		method.name        = entry.name;
 		method.descriptor  = entry.descriptor;
+		std::vector<ClassMethodRefV1> methodRefs;
+		std::vector<std::uint8_t> code;
 		for (auto& attribute : entry.attributes) {
-			if (attribute.name == "code") // If the attribute's name is "code" then allocate and set the code pointer of the method.
-				method.allocateCode(attribute.info);
+			if (attribute->name == "code") {
+				code = reinterpret_cast<ClassAttributeMethodCodeV1*>(attribute)->code;
+			} else if (attribute->name == "methodref") {
+				auto ref = reinterpret_cast<ClassAttributeMethodRefV1*>(attribute);
+				ClassMethodRefV1 methodRef;
+				methodRef.byteOffset = ref->byteOffset;
+
+				auto methodRefClassNameEntry = constantPool.getEntry(ref->classNameIndex);
+				if (!methodRefClassNameEntry || methodRefClassNameEntry->getTag() != ClassConstantUTF8EntryV1Tag) {
+					// Method-ref class is either invalid or is not pointing to a UTF8 tag
+					if (loadStatus) *loadStatus = EClassLoadStatus::InvalidMethodRefClassName;
+					return nullptr;
+				}
+				auto methodRefClassName = reinterpret_cast<ClassConstantUTF8EntryV1*>(methodRefClassNameEntry);
+				methodRef.className     = methodRefClassName->string;
+
+				auto methodRefMethodDescriptorEntry = constantPool.getEntry(ref->methodDescriptorIndex);
+				if (!methodRefMethodDescriptorEntry || methodRefMethodDescriptorEntry->getTag() != ClassConstantUTF8EntryV1Tag) {
+					// Method-ref method is either invalid or is not pointing to a UTF8 tag
+					if (loadStatus) *loadStatus = EClassLoadStatus::InvalidMethodRefMethodDescriptor;
+					return nullptr;
+				}
+				auto methodRefMethodDescriptor = reinterpret_cast<ClassConstantUTF8EntryV1*>(methodRefMethodDescriptorEntry);
+				methodRef.methodDescriptor     = methodRefMethodDescriptor->string;
+
+				methodRefs.push_back(methodRef);
+			}
+		}
+
+		if (!code.empty()) {
+			std::uintptr_t globalClassRegistryAddr           = reinterpret_cast<std::uintptr_t>(globalClassRegistry);
+			std::uintptr_t getMethodFromDescriptorErrorcAddr = LavaUBCast<decltype(&ClassRegistry::getMethodFromDescriptorErrorc), std::uintptr_t>(&ClassRegistry::getMethodFromDescriptorErrorc).right;
+
+			std::size_t pCodeOffset = offsetof(Method, pCode);
+
+			std::sort(methodRefs.begin(), methodRefs.end(), [](ClassMethodRefV1& lhs, ClassMethodRefV1& rhs) -> bool {
+				return lhs.byteOffset < rhs.byteOffset;
+			});
+
+			bool requireLargeCall   = pCodeOffset > 255;
+			std::size_t codeLength  = code.size();
+			std::size_t callLength  = requireLargeCall ? 80 : 77;
+			std::size_t callLengths = callLength * methodRefs.size();
+			std::size_t dataLength  = 0;
+			for (auto& methodRef : methodRefs)
+				dataLength += methodRef.className.size() + methodRef.methodDescriptor.size() + 2;
+			code.resize(code.size() + callLengths + dataLength);
+
+			std::size_t offset     = 0;
+			std::size_t dataBegin  = codeLength + callLengths;
+			std::size_t dataOffset = 0;
+			for (auto& methodRef : methodRefs) {
+				std::size_t callBegin                = offset + methodRef.byteOffset;
+				std::size_t callEnd                  = callBegin + callLength;
+				std::size_t classNamePosition        = dataBegin + dataOffset;
+				std::size_t methodDescriptorPosition = dataBegin + dataOffset + methodRef.className.size() + 1;
+				auto codeData                        = code.data();
+				std::memmove(codeData + callEnd - 1, codeData + callBegin, codeLength - methodRef.byteOffset);
+				std::int32_t classNameOffset        = static_cast<std::int32_t>(classNamePosition) - (static_cast<std::int32_t>(callBegin) + 46);
+				std::int32_t methodDescriptorOffset = static_cast<std::int32_t>(methodDescriptorPosition) - (static_cast<std::int32_t>(callBegin) + 53);
+				ByteBuffer call;
+				call.addUI1s({ 0x48, 0x83, 0xEC, 0x38 });       // SUB RSP, 38h
+				call.addUI1s({ 0x48, 0x89, 0x4C, 0x24, 0x20 }); // MOV [RSP + 20h], rcx
+				call.addUI1s({ 0x48, 0x89, 0x54, 0x24, 0x28 }); // MOV [RSP + 28h], rdx
+				call.addUI1s({ 0x4C, 0x89, 0x44, 0x24, 0x30 }); // MOV [RSP + 30h], r8
+				call.addUI1s({ 0x48, 0xB8 });                   // MOV RAX, ??
+				call.addUI8(getMethodFromDescriptorErrorcAddr); // getMethodFromDescriptorErrorc address
+				call.addUI1s({ 0x48, 0xB9 });                   // MOV RCX, ??
+				call.addUI8(globalClassRegistryAddr);           // globalClassRegistry address
+				call.addUI1s({ 0x48, 0x8D, 0x15 });             // LEA RDX, [REL ??]
+				call.addI4(classNameOffset);                    // className offset
+				call.addUI1s({ 0x4C, 0x8D, 0x05 });             // LEA R8, [REL ??]
+				call.addI4(methodDescriptorOffset);             // methodDescriptor offset
+				call.addUI1s({ 0xFF, 0xD0 });                   // CALL RAX
+				call.addUI1s({ 0x48, 0x8B, 0x4C, 0x24, 0x20 }); // MOV rcx, [RSP + 20h]
+				call.addUI1s({ 0x48, 0x8B, 0x54, 0x24, 0x28 }); // MOV rdx, [RSP + 28h]
+				call.addUI1s({ 0x4C, 0x8B, 0x44, 0x24, 0x30 }); // MOV r8,  [RSP + 30h]
+				call.addUI1s({ 0x48, 0x83, 0xC4, 0x38 });       // ADD RSP, 38h
+				if (requireLargeCall) {
+					call.addUI1s({ 0xFF, 0x90 });                         // CALL [RAX + ??]
+					call.addUI4(static_cast<std::uint32_t>(pCodeOffset)); // pCode offset
+				} else {
+					call.addUI1s({ 0xFF, 0x50 });                        // CALL [RAX + ??]
+					call.addUI1(static_cast<std::uint8_t>(pCodeOffset)); // pCode offset
+				}
+				std::memcpy(code.data() + callBegin, call.data(), callLength);
+				std::memcpy(code.data() + classNamePosition, methodRef.className.data(), methodRef.className.size());
+				std::memcpy(code.data() + methodDescriptorPosition, methodRef.methodDescriptor.data(), methodRef.methodDescriptor.size());
+				offset += callLength;
+				dataOffset += methodDescriptorPosition + methodRef.methodDescriptor.size() + 1;
+			}
+
+			method.allocateCode(code);
+			method.makeCodeExecutable();
 		}
 	}
 

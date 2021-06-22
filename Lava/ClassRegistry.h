@@ -25,14 +25,22 @@ enum class EClassLoadStatus : std::uint32_t {
 	InvalidAttributeName,
 	InvalidMethodName,
 	InvalidMethodDescriptor,
+	InvalidMethodRefClassName,
+	InvalidMethodRefMethodDescriptor,
 };
 
 std::ostream& operator<<(std::ostream& stream, EClassLoadStatus status);
 
 class ClassRegistry {
 public:
+	Class* newClass(const std::string& className);
 	void addClassPath(const std::filesystem::path classPath);
 	Class* loadClass(const std::string& className, EClassLoadStatus* loadStatus = nullptr);
+	LAVA_MICROSOFT_CALL_ABI Class* loadClassc(const char* className, EClassLoadStatus* loadStatus = nullptr);
+	Class& loadClassError(const std::string& className);
+	LAVA_MICROSOFT_CALL_ABI Class& loadClassErrorc(const char* className);
+	LAVA_MICROSOFT_CALL_ABI Method& getMethodErrorc(const char* className, const char* methodName);
+	LAVA_MICROSOFT_CALL_ABI Method& getMethodFromDescriptorErrorc(const char* className, const char* methodDescriptor);
 
 	auto& getClassPaths() const { return this->classPaths; }
 	std::vector<Class*> getLoadedClasses() const;
@@ -44,3 +52,5 @@ private:
 	std::vector<std::filesystem::path> classPaths;
 	std::unordered_map<std::string, Class*> classes;
 };
+
+extern ClassRegistry* globalClassRegistry;

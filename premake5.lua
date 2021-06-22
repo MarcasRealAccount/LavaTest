@@ -1,11 +1,12 @@
 workspace("LavaTest")
 	configurations({ "Debug", "Release", "Dist" })
 	platforms({ "x64" })
+	language("C++")
 	cppdialect("C++20")
 	rtti("Off")
 	exceptionhandling("On")
 	flags("MultiProcessorCompile")
-	defines({ "LAVA_SYSTEM_%{cfg.system}" })
+	defines({ "LAVA_SYSTEM_%{cfg.system}", "LAVA_TOOLSET_%{cfg.toolset}" })
 	
 	filter("configurations:Debug")
 		defines({ "_DEBUG", "NRELEASE" })
@@ -26,15 +27,27 @@ workspace("LavaTest")
 		toolset("msc")
 		defines({ "NOMINMAX", "_CRT_SECURE_NO_WARNINGS" })
 	
+	filter({ "toolset:gcc", "system:not windows" })
+		buildoptions({ "-maccumulate-outgoing-args" })
+	
 	filter({})
 	
 	startproject("LavaTest")
 	project("Lava")
 		kind("ConsoleApp")
-		language("C++")
 		location("Lava")
 		targetdir("%{wks.location}/Bin/%{cfg.system}-%{cfg.platform}-%{cfg.buildcfg}/Lava")
 		objdir("%{wks.location}/BinInt/%{cfg.system}-%{cfg.platform}-%{cfg.buildcfg}/Lava")
+		debugdir("%{wks.location}/Run")
+		
+		files({ "%{prj.location}/**" })
+		removefiles({ "**.vcxproj", "**.vcxproj.*", "**/Makefile", "**.make" })
+	
+	project("LavaCompiler")
+		kind("ConsoleApp")
+		location("LavaCompiler")
+		targetdir("%{wks.location}/Bin/%{cfg.system}-%{cfg.platform}-%{cfg.buildcfg}/LavaCompiler")
+		objdir("%{wks.location}/BinInt/%{cfg.system}-%{cfg.platform}-%{cfg.buildcfg}/LavaCompiler")
 		debugdir("%{wks.location}/Run")
 		
 		files({ "%{prj.location}/**" })

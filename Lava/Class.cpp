@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include <sstream>
+
 #if LAVA_SYSTEM_windows
 	#include <Windows.h>
 #elif LAVA_SYSTEM_linux
@@ -118,7 +120,6 @@ void Method::allocateCode(std::vector<std::uint8_t>& code) {
 	this->codeLength = code.size();
 	this->pCode      = reinterpret_cast<std::uint8_t*>(allocateReadWriteMemory(this->codeLength));
 	std::memcpy(this->pCode, code.data(), this->codeLength);
-	makeCodeExecutable();
 }
 
 void Method::makeCodeReadWrite() {
@@ -129,11 +130,53 @@ void Method::makeCodeExecutable() {
 	makeExecutableMemory(this->pCode, this->codeLength);
 }
 
-#if LAVA_SYSTEM_linux
-std::uintptr_t gInvoke(std::uint8_t* pCode, ...) {
-	return 0;
+Method* Class::getMethod(std::string_view name) {
+	for (auto& method : this->methods)
+		if (method.name == name)
+			return &method;
+	return nullptr;
 }
-#endif
+
+Method* Class::getMethodc(const char* name) {
+	return getMethod(name);
+}
+
+Method& Class::getMethodError(std::string_view name) {
+	for (auto& method : this->methods)
+		if (method.name == name)
+			return method;
+	std::ostringstream stream;
+	stream << "Method name '" << name << "' not found";
+	throw std::runtime_error(stream.str());
+}
+
+Method& Class::getMethodErrorc(const char* name) {
+	return getMethodError(name);
+}
+
+Method* Class::getMethodFromDescriptor(std::string_view descriptor) {
+	for (auto& method : this->methods)
+		if (method.descriptor == descriptor)
+			return &method;
+	return nullptr;
+}
+
+Method* Class::getMethodFromDescriptorc(const char* descriptor) {
+	return getMethodFromDescriptor(descriptor);
+}
+
+Method& Class::getMethodFromDescriptorError(std::string_view descriptor) {
+	for (auto& method : this->methods)
+		if (method.descriptor == descriptor)
+			return method;
+	std::ostringstream stream;
+	stream << "Method descriptor '" << descriptor << "' not found";
+	throw std::runtime_error(stream.str());
+}
+
+Method& Class::getMethodFromDescriptorErrorc(const char* descriptor) {
+	return getMethodFromDescriptorError(descriptor);
+}
 
 //----------------------------
 // Windows execute allocation

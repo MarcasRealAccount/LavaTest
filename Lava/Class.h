@@ -6,6 +6,18 @@
 #include <string>
 #include <vector>
 
+#if LAVA_TOOLSET_gcc && !LAVA_SYSTEM_windows
+	#define LAVA_MICROSOFT_CALL_ABI __attribute__((ms_abi))
+#else
+	#define LAVA_MICROSOFT_CALL_ABI
+#endif
+
+#if LAVA_TOOLSET_msc
+	#define LAVA_NOINLINE __declspec(noinline)
+#else
+	#define LAVA_NOINLINE __attribute__((noinline))
+#endif
+
 //-------------
 // Class Flags
 //-------------
@@ -35,7 +47,7 @@ private:
 };
 
 namespace EAccessFlag {
-	static constexpr EAccessFlags Public       = 0x001;
+	static constexpr EAccessFlags Public       = 0x0001;
 	static constexpr EAccessFlags Private      = 0x0002;
 	static constexpr EAccessFlags Protected    = 0x0004;
 	static constexpr EAccessFlags Static       = 0x0008;
@@ -60,7 +72,20 @@ namespace EAccessFlag {
 // Class structures
 //------------------
 
-extern "C" std::uintptr_t gInvoke(std::uint8_t* pCode, std::uint8_t arg0, std::uint8_t arg1, std::uint8_t arg2, ...);
+template <class Left, class Right>
+union LavaUBCast {
+	static_assert(!std::is_same_v<Left, Right>);
+
+	constexpr LavaUBCast(Left left) : left(left) { }
+	LavaUBCast(const LavaUBCast&) = delete;
+	LavaUBCast(LavaUBCast&&)      = delete;
+	LavaUBCast& operator=(const LavaUBCast&) = delete;
+	LavaUBCast& operator=(LavaUBCast&&) = delete;
+	~LavaUBCast() { }
+
+	Left left;
+	Right right;
+};
 
 struct Field;
 struct Method;
@@ -82,12 +107,20 @@ struct Method {
 	std::uint8_t* pCode      = nullptr;
 	bool allocated           = false;
 
+	template <class T>
+	void setMethod(T method) { pCode = LavaUBCast<T, std::uint8_t*>(method).right; }
+
 	void allocateCode(std::vector<std::uint8_t>& code);
 	void makeCodeReadWrite();
 	void makeCodeExecutable();
 	bool isInvokable() const { return this->pCode; }
-	template <class... Ts>
-	std::uintptr_t invoke(Ts&&... args) { return gInvoke(this->pCode, 0, 0, 0, args...); }
+	template <class R, class... Ts>
+	R invoke(Ts&&... args) {
+		if constexpr (std::is_void_v<R>)
+			LavaUBCast<void*, void(LAVA_MICROSOFT_CALL_ABI*)(Ts...)>(this->pCode).right(args...);
+		else
+			return LavaUBCast<void*, R(LAVA_MICROSOFT_CALL_ABI*)(Ts...)>(this->pCode).right(args...);
+	}
 };
 
 struct Class {
@@ -96,4 +129,13 @@ struct Class {
 	std::vector<Class*> supers;
 	std::vector<Field> fields;
 	std::vector<Method> methods;
+
+	Method* getMethod(std::string_view name);
+	LAVA_MICROSOFT_CALL_ABI Method* getMethodc(const char* name);
+	Method& getMethodError(std::string_view name);
+	LAVA_MICROSOFT_CALL_ABI Method& getMethodErrorc(const char* name);
+	Method* getMethodFromDescriptor(std::string_view descriptor);
+	LAVA_MICROSOFT_CALL_ABI Method* getMethodFromDescriptorc(const char* descriptor);
+	Method& getMethodFromDescriptorError(std::string_view descriptor);
+	LAVA_MICROSOFT_CALL_ABI Method& getMethodFromDescriptorErrorc(const char* descriptor);
 };

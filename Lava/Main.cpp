@@ -3,19 +3,19 @@
 #include <filesystem>
 #include <iostream>
 
-void debugPrintClass(Class* clazz) {
-	std::cout << "Class '" << clazz->name << "'\n";
-	std::cout << "\tAccess Flags: '" << clazz->accessFlags << "'\n";
-	for (std::size_t i = 0; i < clazz->supers.size(); i++)
-		std::cout << "\tSuper '" << clazz->supers[i]->name << "'\n";
-	for (std::size_t i = 0; i < clazz->fields.size(); i++) {
-		auto& field = clazz->fields[i];
+void debugPrintClass(Class& clazz) {
+	std::cout << "Class '" << clazz.name << "'\n";
+	std::cout << "\tAccess Flags: '" << clazz.accessFlags << "'\n";
+	for (std::size_t i = 0; i < clazz.supers.size(); i++)
+		std::cout << "\tSuper '" << clazz.supers[i]->name << "'\n";
+	for (std::size_t i = 0; i < clazz.fields.size(); i++) {
+		auto& field = clazz.fields[i];
 		std::cout << "\tField '" << field.name << "'\n";
 		std::cout << "\t\tDescriptor: '" << field.descriptor << "'\n";
 		std::cout << "\t\tAccessFlags: '" << field.accessFlags << "'\n";
 	}
-	for (std::size_t i = 0; i < clazz->methods.size(); i++) {
-		auto& method = clazz->methods[i];
+	for (std::size_t i = 0; i < clazz.methods.size(); i++) {
+		auto& method = clazz.methods[i];
 		std::cout << "\tMethod '" << method.name << "'\n";
 		std::cout << "\t\tDescriptor: '" << method.descriptor << "'\n";
 		std::cout << "\t\tAccessFlags: '" << method.accessFlags << "'\n";
@@ -28,7 +28,9 @@ void debugPrintClass(Class* clazz) {
 				else
 					std::cout << " ";
 			}
-			std::cout << static_cast<uint64_t>(method.pCode[j]);
+			std::uint64_t byte = static_cast<uint64_t>(method.pCode[j]);
+			if (byte <= 0xF) std::cout << '0';
+			std::cout << byte;
 			column++;
 			if (column >= 16) {
 				std::cout << "\n\t\t\t";
@@ -39,21 +41,28 @@ void debugPrintClass(Class* clazz) {
 	}
 }
 
+LAVA_MICROSOFT_CALL_ABI std::uint64_t returnFirstArg(std::uint64_t arg) {
+	return arg + 6;
+}
+
 int main() {
-	ClassRegistry classRegistry;
 	// Add current working directory to the class paths
-	classRegistry.addClassPath(".");
+	globalClassRegistry->addClassPath(".");
 	// Load class "Test" from the "Test.lclass" file in the "Run" directory
-	EClassLoadStatus loadStatus;
-	Class* clazz = classRegistry.loadClass("Test", &loadStatus);
-	if (!clazz) {
-		std::cerr << "Class could not be loaded '" << loadStatus << "'!" << std::endl;
-		return EXIT_FAILURE;
-	}
+	auto& clazz = globalClassRegistry->loadClassErrorc("Test");
 	// Debug print class information
 	debugPrintClass(clazz);
-	// Invoke the first method in the class
-	int result = clazz->methods[0].invoke<char, char, char>(1, 2, 3);
+	// Invoke the method 'P' in the class
+	auto& method = clazz.getMethodFromDescriptorErrorc("P");
+
+	auto otherClazz = globalClassRegistry->newClass("Other");
+	Method otherClazzL;
+	otherClazzL.name       = "L";
+	otherClazzL.descriptor = "L";
+	otherClazzL.setMethod(&returnFirstArg);
+	otherClazz->methods.push_back(otherClazzL);
+
+	std::uint64_t result = method.invoke<int, std::uint64_t, std::uint64_t, std::uint64_t>(1, 2, 3);
 	// Print the return value from the method
 	std::cout << "Returned: " << std::hex << std::uppercase << result << std::dec << std::nouppercase << "\n";
 }
