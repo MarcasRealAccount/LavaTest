@@ -35,11 +35,12 @@ class ClassRegistry {
 public:
 	Class* newClass(const std::string& className);
 	void addClassPath(const std::filesystem::path classPath);
+	Class* getClass(const std::string& className);
 	Class* loadClass(const std::string& className, EClassLoadStatus* loadStatus = nullptr);
-	LAVA_MICROSOFT_CALL_ABI Class* loadClassc(const char* className, EClassLoadStatus* loadStatus = nullptr);
+	Class* loadClassc(const char* className, EClassLoadStatus* loadStatus = nullptr);
 	Class& loadClassError(const std::string& className);
-	LAVA_MICROSOFT_CALL_ABI Class& loadClassErrorc(const char* className);
-	LAVA_MICROSOFT_CALL_ABI Method& getMethodErrorc(const char* className, const char* methodName);
+	Class& loadClassErrorc(const char* className);
+	Method& getMethodErrorc(const char* className, const char* methodName);
 	LAVA_MICROSOFT_CALL_ABI Method& getMethodFromDescriptorErrorc(const char* className, const char* methodDescriptor);
 
 	auto& getClassPaths() const { return this->classPaths; }

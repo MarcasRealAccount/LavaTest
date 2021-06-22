@@ -131,11 +131,11 @@ struct Class {
 	std::vector<Method> methods;
 
 	Method* getMethod(std::string_view name);
-	LAVA_MICROSOFT_CALL_ABI Method* getMethodc(const char* name);
+	Method* getMethodc(const char* name);
 	Method& getMethodError(std::string_view name);
-	LAVA_MICROSOFT_CALL_ABI Method& getMethodErrorc(const char* name);
+	Method& getMethodErrorc(const char* name);
 	Method* getMethodFromDescriptor(std::string_view descriptor);
-	LAVA_MICROSOFT_CALL_ABI Method* getMethodFromDescriptorc(const char* descriptor);
+	Method* getMethodFromDescriptorc(const char* descriptor);
 	Method& getMethodFromDescriptorError(std::string_view descriptor);
-	LAVA_MICROSOFT_CALL_ABI Method& getMethodFromDescriptorErrorc(const char* descriptor);
+	Method& getMethodFromDescriptorErrorc(const char* descriptor);
 };

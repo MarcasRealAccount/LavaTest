@@ -48,19 +48,23 @@ LAVA_MICROSOFT_CALL_ABI std::uint64_t returnFirstArg(std::uint64_t arg) {
 int main() {
 	// Add current working directory to the class paths
 	globalClassRegistry->addClassPath(".");
-	// Load class "Test" from the "Test.lclass" file in the "Run" directory
-	auto& clazz = globalClassRegistry->loadClassErrorc("Test");
-	// Debug print class information
-	debugPrintClass(clazz);
-	// Invoke the method 'P' in the class
-	auto& method = clazz.getMethodFromDescriptorErrorc("P");
 
+#if 1
+	// Construct a new class before starting app
 	auto otherClazz = globalClassRegistry->newClass("Other");
 	Method otherClazzL;
 	otherClazzL.name       = "L";
 	otherClazzL.descriptor = "L";
 	otherClazzL.setMethod(&returnFirstArg);
 	otherClazz->methods.push_back(otherClazzL);
+#endif
+
+	// Load class "Test" from the "Test.lclass" file in the "Run" directory
+	auto& clazz = globalClassRegistry->loadClassErrorc("Test");
+	// Debug print class information
+	debugPrintClass(clazz);
+	// Invoke the method 'P' in the class
+	auto& method = clazz.getMethodFromDescriptorErrorc("P");
 
 	std::uint64_t result = method.invoke<int, std::uint64_t, std::uint64_t, std::uint64_t>(1, 2, 3);
 	// Print the return value from the method
