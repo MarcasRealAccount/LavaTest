@@ -538,13 +538,15 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 			// Check how much space each method ref requires to call
 			for (auto& methodRef : methodRefs) {
 				Class* methodRefClass = registry->getClass(methodRef.className);
-				if (!methodRefClass) {
+				if (!methodRefClass && !registry->getPreloadRequiredClasses()) {
 					strings.insert({ methodRef.className, 0 });
 					strings.insert({ methodRef.methodDescriptor, 0 });
 					ptrs.insert({ classRegistryAddr, 0 });
 					ptrs.insert({ getMethodFromDescriptorErrorcAddr, 0 });
 					callLength += getCallLength;
 					continue;
+				} else {
+					methodRefClass = &registry->loadClassError(methodRef.className);
 				}
 				loadedClasses.insert(methodRef.className);
 				Method* methodRefMethod = methodRefClass->getMethodFromDescriptor(methodRef.methodDescriptor);
@@ -592,10 +594,10 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 					Method* methodRefMethod  = methodRefClass->getMethodFromDescriptor(methodRef.methodDescriptor);
 					std::uintptr_t methodPtr = LavaUBCast<std::uint8_t*, std::uintptr_t>(methodRefMethod->pCode).right;
 
-					std::int32_t offset = static_cast<std::int32_t>((dataBegin + ptrs.find(methodPtr)->second) - (callBegin + 6));
+					std::int32_t addrOffset = static_cast<std::int32_t>((dataBegin + ptrs.find(methodPtr)->second) - (callBegin + 6));
 					ByteBuffer call;
 					call.addUI1s({ 0xFF, 0x15 }); // CALL [REL ??]
-					call.addI4(offset);           // Offset to address of method to call
+					call.addI4(addrOffset);       // Offset to address of method to call
 
 					// Copy the call into the code
 					std::memcpy(pCode + callBegin, call.data(), directCallLength);
@@ -604,8 +606,8 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 					// Get string offsets
 					std::int32_t classRegistryOffset                 = static_cast<std::int32_t>((dataBegin + ptrs.find(classRegistryAddr)->second) - (callBegin + 26));
 					std::int32_t getMethodFromDescriptorErrorcOffset = static_cast<std::int32_t>((dataBegin + ptrs.find(getMethodFromDescriptorErrorcAddr)->second) - (callBegin + 46));
-					std::int32_t classNameOffset                     = static_cast<std::int32_t>(dataBegin + strings.find(methodRef.className)->second) - (callBegin + 33);
-					std::int32_t methodDescriptorOffset              = static_cast<std::int32_t>(dataBegin + strings.find(methodRef.methodDescriptor)->second) - (callBegin + 40);
+					std::int32_t classNameOffset                     = static_cast<std::int32_t>((dataBegin + strings.find(methodRef.className)->second) - (callBegin + 33));
+					std::int32_t methodDescriptorOffset              = static_cast<std::int32_t>((dataBegin + strings.find(methodRef.methodDescriptor)->second) - (callBegin + 40));
 
 					// Move bytes after call
 					std::memmove(pCode + callBegin + getCallLength, pCode + callBegin + 1, codeLength - methodRef.byteOffset - 1);

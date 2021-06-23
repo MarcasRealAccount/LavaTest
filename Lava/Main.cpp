@@ -48,8 +48,9 @@ LAVA_MICROSOFT_CALL_ABI std::uint64_t returnFirstArg(std::uint64_t arg) {
 int main() {
 	// Add current working directory to the class paths
 	globalClassRegistry->addClassPath(".");
+	globalClassRegistry->setPreloadRequiredClasses(true);
 
-#if 1
+#if 0
 	// Construct a new class before starting app
 	auto otherClazz = globalClassRegistry->newClass("Other");
 	Method otherClazzL;

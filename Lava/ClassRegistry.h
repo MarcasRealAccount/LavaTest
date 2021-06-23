@@ -43,6 +43,8 @@ public:
 	Method& getMethodErrorc(const char* className, const char* methodName);
 	LAVA_MICROSOFT_CALL_ABI Method& getMethodFromDescriptorErrorc(const char* className, const char* methodDescriptor);
 
+	auto getPreloadRequiredClasses() const { return this->preloadRequiredClasses; }
+	void setPreloadRequiredClasses(bool preloadRequiredClasses) { this->preloadRequiredClasses = preloadRequiredClasses; }
 	auto& getClassPaths() const { return this->classPaths; }
 	std::vector<Class*> getLoadedClasses() const;
 
@@ -50,6 +52,7 @@ private:
 	std::filesystem::path findClass(std::string_view className) const;
 
 private:
+	bool preloadRequiredClasses = false;
 	std::vector<std::filesystem::path> classPaths;
 	std::unordered_map<std::string, Class*> classes;
 };
