@@ -522,11 +522,12 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 			std::size_t pCodeOffset                          = offsetof(Method, pCode);
 			bool requireLargeCall                            = pCodeOffset > 255;
 			std::size_t codeLength                           = code.size();
-			std::size_t getCallLength                        = requireLargeCall ? 80 : 77;
-			std::size_t directCallLength                     = 12;
+			std::size_t getCallLength                        = requireLargeCall ? 71 : 68;
+			std::size_t directCallLength                     = 6;
 			std::size_t callLength                           = 0;
 			std::size_t dataLength                           = 0;
 			std::unordered_map<std::string, std::size_t> strings;
+			std::unordered_map<std::uintptr_t, std::size_t> ptrs;
 			std::set<std::string> loadedClasses;
 
 			// Sort method refs based on their byte offset
@@ -540,6 +541,8 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 				if (!methodRefClass) {
 					strings.insert({ methodRef.className, 0 });
 					strings.insert({ methodRef.methodDescriptor, 0 });
+					ptrs.insert({ classRegistryAddr, 0 });
+					ptrs.insert({ getMethodFromDescriptorErrorcAddr, 0 });
 					callLength += getCallLength;
 					continue;
 				}
@@ -548,20 +551,27 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 				if (!methodRefMethod)
 					throw std::runtime_error("Method wants to invoke a nonexistant method '" + methodRef.methodDescriptor + "' in class '" + methodRef.className + "'");
 				callLength += directCallLength;
+				ptrs.insert({ LavaUBCast<std::uint8_t*, std::uintptr_t>(methodRefMethod->pCode).right, 0 });
 			}
 
 			// Check how much space each string requires
 			for (auto& string : strings) dataLength += string.first.size() + 1;
+			dataLength += 8 * ptrs.size();
 
-			std::size_t dataBegin = codeLength + callLength - 1;
+			std::size_t dataBegin = codeLength + callLength;
 			// Resize the code to the new length
 			code.resize(dataBegin + dataLength, 0);
-			method.allocateCode(code);
-			auto pCode               = method.pCode;
-			std::uintptr_t pCodeAddr = LavaUBCast<std::uint8_t*, std::uintptr_t>(pCode).right;
+			auto pCode = code.data();
+
+			// Write the points into the code
+			std::size_t dataOffset = 0;
+			for (auto& ptr : ptrs) {
+				std::memcpy(pCode + dataBegin + dataOffset, &ptr.first, 8);
+				ptr.second = dataOffset;
+				dataOffset += 8;
+			}
 
 			// Write the strings into the code
-			std::size_t dataOffset = 0;
 			for (auto& string : strings) {
 				std::memcpy(pCode + dataBegin + dataOffset, string.first.data(), string.first.size());
 				string.second = dataOffset;
@@ -575,47 +585,49 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 				// If method refers to an already loaded class optimize the call to the direct call, else use the get call
 				if (loadedClasses.find(methodRef.className) != loadedClasses.end()) {
 					// Move bytes after call
-					std::memmove(pCode + callBegin + directCallLength, pCode + callBegin + 1, directCallLength);
+					std::memmove(pCode + callBegin + directCallLength, pCode + callBegin + 1, codeLength - methodRef.byteOffset - 1);
 
 					// Create the call in assembly
 					Class* methodRefClass    = registry->getClass(methodRef.className);
 					Method* methodRefMethod  = methodRefClass->getMethodFromDescriptor(methodRef.methodDescriptor);
 					std::uintptr_t methodPtr = LavaUBCast<std::uint8_t*, std::uintptr_t>(methodRefMethod->pCode).right;
+
+					std::int32_t offset = static_cast<std::int32_t>((dataBegin + ptrs.find(methodPtr)->second) - (callBegin + 6));
 					ByteBuffer call;
-					call.addUI1s({ 0x48, 0xB8 }); // MOV RAX, ??
-					call.addUI8(methodPtr);       // Address of method to call
-					call.addUI1s({ 0xFF, 0xD0 }); // CALL RAX
+					call.addUI1s({ 0xFF, 0x15 }); // CALL [REL ??]
+					call.addI4(offset);           // Offset to address of method to call
 
 					// Copy the call into the code
 					std::memcpy(pCode + callBegin, call.data(), directCallLength);
 					offset += directCallLength;
 				} else { // Use the worse in every way get call :|
 					// Get string offsets
-					std::int32_t classNameOffset        = static_cast<std::int32_t>(dataBegin + strings.find(methodRef.className)->second) - (callBegin + 35);
-					std::int32_t methodDescriptorOffset = static_cast<std::int32_t>(dataBegin + strings.find(methodRef.methodDescriptor)->second) - (callBegin + 43);
+					std::int32_t classRegistryOffset                 = static_cast<std::int32_t>((dataBegin + ptrs.find(classRegistryAddr)->second) - (callBegin + 26));
+					std::int32_t getMethodFromDescriptorErrorcOffset = static_cast<std::int32_t>((dataBegin + ptrs.find(getMethodFromDescriptorErrorcAddr)->second) - (callBegin + 46));
+					std::int32_t classNameOffset                     = static_cast<std::int32_t>(dataBegin + strings.find(methodRef.className)->second) - (callBegin + 33);
+					std::int32_t methodDescriptorOffset              = static_cast<std::int32_t>(dataBegin + strings.find(methodRef.methodDescriptor)->second) - (callBegin + 40);
 
 					// Move bytes after call
-					std::memmove(pCode + callBegin + getCallLength, pCode + callBegin + 1, codeLength - methodRef.byteOffset);
+					std::memmove(pCode + callBegin + getCallLength, pCode + callBegin + 1, codeLength - methodRef.byteOffset - 1);
 
 					// Create the call in assembly
 					ByteBuffer call;
-					call.addUI1s({ 0x48, 0x83, 0xEC, 0x38 });       // SUB RSP, 38h
-					call.addUI1s({ 0x48, 0x89, 0x4C, 0x24, 0x20 }); // MOV [RSP + 20h], rcx
-					call.addUI1s({ 0x48, 0x89, 0x54, 0x24, 0x28 }); // MOV [RSP + 28h], rdx
-					call.addUI1s({ 0x4C, 0x89, 0x44, 0x24, 0x30 }); // MOV [RSP + 30h], r8
-					call.addUI1s({ 0x48, 0xB9 });                   // MOV RCX, ??
-					call.addUI8(classRegistryAddr);                 // classRegistry address
-					call.addUI1s({ 0x48, 0x8D, 0x15 });             // LEA RDX, [REL ??]
-					call.addI4(classNameOffset);                    // className offset
-					call.addUI1s({ 0x4C, 0x8D, 0x05 });             // LEA R8, [REL ??]
-					call.addI4(methodDescriptorOffset);             // methodDescriptor offset
-					call.addUI1s({ 0x48, 0xB8 });                   // MOV RAX, ??
-					call.addUI8(getMethodFromDescriptorErrorcAddr); // getMethodFromDescriptorErrorc address
-					call.addUI1s({ 0xFF, 0xD0 });                   // CALL RAX
-					call.addUI1s({ 0x48, 0x8B, 0x4C, 0x24, 0x20 }); // MOV rcx, [RSP + 20h]
-					call.addUI1s({ 0x48, 0x8B, 0x54, 0x24, 0x28 }); // MOV rdx, [RSP + 28h]
-					call.addUI1s({ 0x4C, 0x8B, 0x44, 0x24, 0x30 }); // MOV r8,  [RSP + 30h]
-					call.addUI1s({ 0x48, 0x83, 0xC4, 0x38 });       // ADD RSP, 38h
+					call.addUI1s({ 0x48, 0x83, 0xEC, 0x38 });        // SUB RSP, 38h
+					call.addUI1s({ 0x48, 0x89, 0x4C, 0x24, 0x20 });  // MOV [RSP + 20h], rcx
+					call.addUI1s({ 0x48, 0x89, 0x54, 0x24, 0x28 });  // MOV [RSP + 28h], rdx
+					call.addUI1s({ 0x4C, 0x89, 0x44, 0x24, 0x30 });  // MOV [RSP + 30h], r8
+					call.addUI1s({ 0x48, 0x8B, 0x0D });              // MOV RCX, [REL ??]
+					call.addI4(classRegistryOffset);                 // classRegistry offset
+					call.addUI1s({ 0x48, 0x8D, 0x15 });              // LEA RDX, [REL ??]
+					call.addI4(classNameOffset);                     // className offset
+					call.addUI1s({ 0x4C, 0x8D, 0x05 });              // LEA R8, [REL ??]
+					call.addI4(methodDescriptorOffset);              // methodDescriptor offset
+					call.addUI1s({ 0xFF, 0x15 });                    // CALL [REL ??]
+					call.addI4(getMethodFromDescriptorErrorcOffset); // getMethodFromDescriptorErrorc offset
+					call.addUI1s({ 0x48, 0x8B, 0x4C, 0x24, 0x20 });  // MOV rcx, [RSP + 20h]
+					call.addUI1s({ 0x48, 0x8B, 0x54, 0x24, 0x28 });  // MOV rdx, [RSP + 28h]
+					call.addUI1s({ 0x4C, 0x8B, 0x44, 0x24, 0x30 });  // MOV r8,  [RSP + 30h]
+					call.addUI1s({ 0x48, 0x83, 0xC4, 0x38 });        // ADD RSP, 38h
 					if (requireLargeCall) {
 						call.addUI1s({ 0xFF, 0x90 });                         // CALL [RAX + ??]
 						call.addUI4(static_cast<std::uint32_t>(pCodeOffset)); // pCode offset
@@ -630,6 +642,7 @@ Class* loadClassV1(ClassRegistry* registry, ByteBuffer& buffer, EClassLoadStatus
 				}
 			}
 
+			method.allocateCode(code);
 			method.makeCodeExecutable();
 		}
 	}
